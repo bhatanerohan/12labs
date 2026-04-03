@@ -5,7 +5,16 @@ from twelvelabs import TwelveLabs
 
 
 TRAIT_EXTRACTION_PROMPT = """Analyze this ad video and return ONLY a JSON object with these exact fields:
-{"hook_type": "<one of: question, stat, emotion, product-first>", "pacing": "<one of: fast-cuts, slow-build, single-shot>", "tone": "<one of: aspirational, humorous, urgent, educational>", "cta_style": "<one of: direct, soft, none>", "visual_style": "<one of: cinematic, lo-fi, text-heavy, product-closeup>"}
+{
+  "hook_type": "<one of: question, stat, emotion, product-first>",
+  "pacing": "<one of: fast-cuts, slow-build, single-shot>",
+  "tone": "<one of: aspirational, humorous, urgent, educational>",
+  "cta_style": "<one of: direct, soft, none>",
+  "visual_style": "<one of: cinematic, lo-fi, text-heavy, product-closeup>",
+  "first_3_seconds": "<one sentence describing exactly what happens in the first 3 seconds>",
+  "talent_type": "<one of: none, actor, ugc-creator, brand-mascot>",
+  "product_visibility": "<one of: early, late, throughout, none>"
+}
 Return only the JSON object, no other text."""
 
 BRIEF_GENERATION_PROMPT = """You are a creative strategist. Here is a pattern analysis of top-performing reference ads:
@@ -62,6 +71,26 @@ def extract_traits(client: TwelveLabs, video_id: str) -> dict:
         return {}
 
 
+def extract_scene_chapters(client: TwelveLabs, video_id: str) -> list[dict]:
+    """
+    Uses Pegasus generate.gist() to extract timestamped chapters (hook, body, CTA, etc.)
+    Returns a list of {"title": ..., "summary": ..., "start": ..., "end": ...}
+    """
+    try:
+        response = client.generate.gist(video_id=video_id, types=["chapter"])
+        chapters = []
+        for ch in (response.chapters or []):
+            chapters.append({
+                "title": ch.chapter_title,
+                "summary": ch.chapter_summary,
+                "start": ch.start,
+                "end": ch.end,
+            })
+        return chapters
+    except Exception:
+        return []
+
+
 def generate_brief(client: TwelveLabs, video_id: str, pattern_summary: str, brand_context: str = "") -> str:
     brand_context_section = ""
     if brand_context:
@@ -77,3 +106,30 @@ def generate_brief(client: TwelveLabs, video_id: str, pattern_summary: str, bran
         prompt=prompt,
     )
     return response.data
+
+
+def index_videos_from_urls(api_key: str, index_name: str, video_urls: list[str]) -> dict:
+    """
+    Creates a new Twelve Labs index with Marengo + Pegasus, uploads the given video URLs,
+    polls until all tasks complete, and returns {"index_id": ..., "video_map": {url: video_id}}.
+    """
+    client = get_client(api_key)
+
+    index = client.indexes.create(
+        name=index_name,
+        models=[
+            {"name": "marengo2.6", "options": ["visual", "audio"]},
+            {"name": "pegasus1.2", "options": ["visual", "audio"]},
+        ],
+    )
+
+    video_map = {}
+    for url in video_urls:
+        task = client.tasks.create(index_id=index.id, url=url)
+        task.wait_for_done(sleep_interval=5)
+        if task.status == "ready":
+            video_map[url] = task.video_id
+        else:
+            video_map[url] = None
+
+    return {"index_id": index.id, "video_map": video_map}

@@ -4,6 +4,7 @@ version: 0.1.0
 fiftyone:
   version: ">=0.21"
 operators:
+  - index_videos
   - search_ad_references
   - extract_ad_traits
   - synthesize_patterns

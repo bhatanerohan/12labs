@@ -4,11 +4,12 @@ import re
 import time
 from collections import Counter
 
+import fiftyone as fo
 import fiftyone.operators as foo
 import fiftyone.operators.types as types
 from fiftyone import ViewField as F
 
-from .twelvelabs_api import get_client, search_videos, extract_traits, generate_brief as tl_generate_brief
+from .twelvelabs_api import get_client, search_videos, extract_traits, extract_scene_chapters, generate_brief as tl_generate_brief, index_videos_from_urls
 
 
 class SearchAdReferences(foo.Operator):
@@ -87,6 +88,13 @@ class ExtractAdTraits(foo.Operator):
             sample["tone"] = traits.get("tone")
             sample["cta_style"] = traits.get("cta_style")
             sample["visual_style"] = traits.get("visual_style")
+            sample["first_3_seconds"] = traits.get("first_3_seconds")
+            sample["talent_type"] = traits.get("talent_type")
+            sample["product_visibility"] = traits.get("product_visibility")
+
+            chapters = extract_scene_chapters(client, video_id)
+            if chapters:
+                sample["chapters"] = chapters
             sample.save()
 
             count += 1
@@ -115,7 +123,7 @@ class SynthesizePatterns(foo.Operator):
         return types.Property(inputs)
 
     def execute(self, ctx):
-        trait_fields = ["hook_type", "pacing", "tone", "cta_style", "visual_style"]
+        trait_fields = ["hook_type", "pacing", "tone", "cta_style", "visual_style", "talent_type", "product_visibility"]
         trait_values = {field: [] for field in trait_fields}
 
         for sample in ctx.view:
@@ -157,6 +165,12 @@ class SynthesizePatterns(foo.Operator):
         if "visual_style" in dominant_info:
             d, c = dominant_info["visual_style"]
             insights.append(f"- **{d}** is the dominant visual style ({c}/{n})")
+        if "talent_type" in dominant_info:
+            d, c = dominant_info["talent_type"]
+            insights.append(f"- Most ads feature **{d}** talent ({c}/{n})")
+        if "product_visibility" in dominant_info:
+            d, c = dominant_info["product_visibility"]
+            insights.append(f"- Product visibility is typically **{d}** ({c}/{n})")
 
         insights_text = "\n".join(insights)
 
@@ -225,7 +239,65 @@ class GenerateBrief(foo.Operator):
         return types.Property(outputs)
 
 
+class IndexVideos(foo.Operator):
+    @property
+    def config(self):
+        return foo.OperatorConfig(
+            name="index_videos",
+            label="Index Videos into Twelve Labs",
+        )
+
+    def resolve_input(self, ctx):
+        inputs = types.Object()
+        inputs.str("index_name", required=True, label="Index Name")
+        inputs.str(
+            "video_urls",
+            required=True,
+            label="Video URLs (one per line)",
+            description="Paste public video URLs, one per line",
+        )
+        return types.Property(inputs)
+
+    def execute(self, ctx):
+        api_key = ctx.secret("TWELVE_LABS_API_KEY") or os.getenv("TWELVE_LABS_API_KEY")
+        index_name = ctx.params["index_name"]
+        raw_urls = ctx.params["video_urls"]
+        video_urls = [u.strip() for u in raw_urls.splitlines() if u.strip()]
+
+        result = index_videos_from_urls(api_key, index_name, video_urls)
+
+        index_id = result["index_id"]
+        video_map = result["video_map"]
+
+        # Add indexed videos to current dataset
+        dataset = ctx.dataset
+        for url, vid_id in video_map.items():
+            if vid_id is None:
+                continue
+            # Check if sample with this video_id already exists
+            existing = dataset.match(F("twelvelabs_video_id") == vid_id)
+            if len(existing) == 0:
+                sample = fo.Sample(filepath=url)
+                sample["twelvelabs_video_id"] = vid_id
+                sample["source_url"] = url
+                dataset.add_sample(sample)
+
+        dataset.save()
+        ctx.ops.reload_dataset()
+
+        indexed_count = sum(1 for v in video_map.values() if v is not None)
+        return {
+            "message": f"Created index '{index_name}' (ID: {index_id}). Indexed {indexed_count}/{len(video_urls)} videos."
+        }
+
+    def resolve_output(self, ctx):
+        outputs = types.Object()
+        outputs.str("message", label="Result")
+        return types.Property(outputs)
+
+
 def register(p):
+    p.register(IndexVideos)
     p.register(SearchAdReferences)
     p.register(ExtractAdTraits)
     p.register(SynthesizePatterns)
