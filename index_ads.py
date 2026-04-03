@@ -8,13 +8,16 @@ from ad_brief_copilot.twelvelabs_api import index_videos_from_urls
 
 load_dotenv()
 
-INDEX_NAME = "ad-campaign-refs"
+INDEX_NAME = "ad-campaign-refs-v2"
 DATASET_NAME = "ad-campaign-refs"
 
 VIDEO_URLS = [
-    # Paste your public video URLs here, one per line, e.g.:
-    # "https://storage.googleapis.com/your-bucket/ad1.mp4",
-    # "https://storage.googleapis.com/your-bucket/ad2.mp4",
+    "https://huggingface.co/datasets/bhatanerohan/MarketingVideos/resolve/main/lux_06_mercedes.mp4",
+    "https://huggingface.co/datasets/bhatanerohan/MarketingVideos/resolve/main/lux_07_chanel.mp4",
+    "https://huggingface.co/datasets/bhatanerohan/MarketingVideos/resolve/main/lux_08_apple_air.mp4",
+    "https://huggingface.co/datasets/bhatanerohan/MarketingVideos/resolve/main/sport_01_nike_sowin.mp4",
+    "https://huggingface.co/datasets/bhatanerohan/MarketingVideos/resolve/main/sport_02_nike_winning.mp4",
+    "https://huggingface.co/datasets/bhatanerohan/MarketingVideos/resolve/main/ugc_08_honey.mp4",
 ]
 
 

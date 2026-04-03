@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 from twelvelabs import TwelveLabs
 
@@ -55,8 +56,9 @@ def search_videos(client: TwelveLabs, index_id: str, query: str, top_k: int) -> 
     return output
 
 
-def extract_traits(client: TwelveLabs, video_id: str) -> dict:
-    response = client.generate.text(
+def extract_traits(api_key: str, video_id: str) -> dict:
+    client = get_client(api_key)
+    response = client.analyze(
         video_id=video_id,
         prompt=TRAIT_EXTRACTION_PROMPT,
     )
@@ -71,27 +73,24 @@ def extract_traits(client: TwelveLabs, video_id: str) -> dict:
         return {}
 
 
-def extract_scene_chapters(client: TwelveLabs, video_id: str) -> list[dict]:
-    """
-    Uses Pegasus generate.gist() to extract timestamped chapters (hook, body, CTA, etc.)
-    Returns a list of {"title": ..., "summary": ..., "start": ..., "end": ...}
-    """
+def extract_scene_chapters(api_key: str, video_id: str) -> list[dict]:
+    """Extract timestamped chapters from the video."""
     try:
-        response = client.generate.gist(video_id=video_id, types=["chapter"])
-        chapters = []
-        for ch in (response.chapters or []):
-            chapters.append({
-                "title": ch.chapter_title,
-                "summary": ch.chapter_summary,
-                "start": ch.start,
-                "end": ch.end,
-            })
-        return chapters
+        client = get_client(api_key)
+        response = client.analyze(
+            video_id=video_id,
+            prompt="List the chapters of this video as a JSON array with fields: title, summary, start, end. Return only valid JSON.",
+        )
+        text = response.data
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        return []
     except Exception:
         return []
 
 
-def generate_brief(client: TwelveLabs, video_id: str, pattern_summary: str, brand_context: str = "") -> str:
+def generate_brief(api_key: str, video_id: str, pattern_summary: str, brand_context: str = "") -> str:
     brand_context_section = ""
     if brand_context:
         brand_context_section = f"Brand/Product Context: {brand_context}"
@@ -101,7 +100,8 @@ def generate_brief(client: TwelveLabs, video_id: str, pattern_summary: str, bran
         brand_context_section=brand_context_section,
     )
 
-    response = client.generate.text(
+    client = get_client(api_key)
+    response = client.analyze(
         video_id=video_id,
         prompt=prompt,
     )
@@ -116,20 +116,28 @@ def index_videos_from_urls(api_key: str, index_name: str, video_urls: list[str])
     client = get_client(api_key)
 
     index = client.indexes.create(
-        name=index_name,
+        index_name=index_name,
         models=[
-            {"name": "marengo2.6", "options": ["visual", "audio"]},
-            {"name": "pegasus1.2", "options": ["visual", "audio"]},
+            {"model_name": "marengo3.0", "model_options": ["visual", "audio"]},
+            {"model_name": "pegasus1.2", "model_options": ["visual", "audio"]},
         ],
     )
 
     video_map = {}
     for url in video_urls:
-        task = client.tasks.create(index_id=index.id, url=url)
-        task.wait_for_done(sleep_interval=5)
-        if task.status == "ready":
-            video_map[url] = task.video_id
-        else:
-            video_map[url] = None
+        task = client.tasks.create(index_id=index.id, video_url=url)
+        task_id = task.id
+        print(f"  Uploading {url.split('/')[-1]} (task {task_id})...")
+        while True:
+            status = client.tasks.retrieve(task_id)
+            if status.status == "ready":
+                video_map[url] = status.video_id
+                print(f"  ✓ {url.split('/')[-1]} → {status.video_id}")
+                break
+            elif status.status == "failed":
+                video_map[url] = None
+                print(f"  ✗ {url.split('/')[-1]} failed")
+                break
+            time.sleep(5)
 
     return {"index_id": index.id, "video_map": video_map}

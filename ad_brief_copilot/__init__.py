@@ -1,8 +1,17 @@
 import os
+import sys
 import json
 import re
 import time
 from collections import Counter
+from dotenv import load_dotenv
+
+load_dotenv(os.path.expanduser("~/Desktop/Hack/12labs/.env"))
+
+# Ensure the project venv's packages take priority
+_venv_site = os.path.expanduser("~/Desktop/Hack/12labs/.venv/lib/python3.11/site-packages")
+if _venv_site not in sys.path:
+    sys.path.insert(0, _venv_site)
 
 import fiftyone as fo
 import fiftyone.operators as foo
@@ -73,15 +82,17 @@ class ExtractAdTraits(foo.Operator):
 
     def execute(self, ctx):
         api_key = ctx.secret("TWELVE_LABS_API_KEY") or os.getenv("TWELVE_LABS_API_KEY")
-        client = get_client(api_key)
 
         count = 0
         for sample in ctx.view:
-            video_id = sample.get("twelvelabs_video_id")
+            try:
+                video_id = sample["twelvelabs_video_id"]
+            except AttributeError:
+                continue
             if not video_id:
                 continue
 
-            traits = extract_traits(client, video_id)
+            traits = extract_traits(api_key, video_id)
 
             sample["hook_type"] = traits.get("hook_type")
             sample["pacing"] = traits.get("pacing")
@@ -92,7 +103,7 @@ class ExtractAdTraits(foo.Operator):
             sample["talent_type"] = traits.get("talent_type")
             sample["product_visibility"] = traits.get("product_visibility")
 
-            chapters = extract_scene_chapters(client, video_id)
+            chapters = extract_scene_chapters(api_key, video_id)
             if chapters:
                 sample["chapters"] = chapters
             sample.save()
@@ -128,7 +139,10 @@ class SynthesizePatterns(foo.Operator):
 
         for sample in ctx.view:
             for field in trait_fields:
-                value = sample.get(field)
+                try:
+                    value = sample[field]
+                except AttributeError:
+                    value = None
                 if value:
                     trait_values[field].append(value)
 
@@ -218,7 +232,6 @@ class GenerateBrief(foo.Operator):
 
     def execute(self, ctx):
         api_key = ctx.secret("TWELVE_LABS_API_KEY") or os.getenv("TWELVE_LABS_API_KEY")
-        client = get_client(api_key)
 
         top_video_id = ctx.params["top_video_id"]
         brand_context = ctx.params.get("brand_context", "")
@@ -228,7 +241,7 @@ class GenerateBrief(foo.Operator):
         )
 
         brief_text = tl_generate_brief(
-            client, top_video_id, pattern_summary, brand_context
+            api_key, top_video_id, pattern_summary, brand_context
         )
 
         return {"brief": brief_text}
